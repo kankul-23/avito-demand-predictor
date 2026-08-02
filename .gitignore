@@ -1,0 +1,30 @@
+# Виртуальное окружение
+.venv/
+
+# Данные (тяжелые файлы не коммитим)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Тяжелые артефакты моделей (хранятся в MLflow/S3)
+models/*.cbm
+models/*.pkl
+models/*.txt
+
+# Логи, кэш и чекпоинты
+catboost_info/
+mlruns/
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+
+# Приватные файлы, доклады и заметки
+*.docx
+*.pptx
+Доклад_текст_выступления.md
+код структуры.txt
+структура проекта.txt
+
+# Тесты (добавим отдельным этапом позже)
+tests/
