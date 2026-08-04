@@ -33,7 +33,8 @@ JSON-сравнение всё равно отработают как раньш
 Запуск:
     python -m scripts.mlflow_tracking
     python -m scripts.mlflow_tracking --models catboost lightgbm
-    python -m scripts.mlflow_tracking --include-tuning
+    python -m scripts.mlflow_tracking --tuning catboost
+    python -m scripts.mlflow_tracking --tuning catboost lightgbm
 """
 import argparse
 import logging
@@ -145,6 +146,54 @@ MODEL_LOGGERS = {
 }
 
 
+def _log_catboost_tuning(n_trials: int) -> dict:
+    """
+    Optuna-поиск для CatBoost (scripts/tune_catboost.py).
+
+    tune_hyperparameters() возвращает единый {"best_params": ...} —
+    гиперпараметры модели логируются одним словарём как есть.
+    """
+    from scripts.tune_catboost import tune_hyperparameters
+
+    result = tune_hyperparameters(n_trials=n_trials, save=True)
+
+    mlflow.log_params(result["best_params"])
+    mlflow.log_metric("best_roc_auc", result["best_value"])
+
+    return result
+
+
+def _log_lightgbm_tuning(n_trials: int) -> dict:
+    """
+    Optuna-поиск для LightGBM (scripts/tune_lightgbm.py).
+
+    В отличие от CatBoost, tune_lightgbm() возвращает ДВА отдельных
+    словаря — best_model_params (гиперпараметры модели) и
+    best_tfidf_max_features (размер TF-IDF словаря по текстовым полям,
+    который здесь тоже часть пространства поиска, см. docstring
+    scripts/tune_lightgbm.py). Логируем оба, но со вторым — с префиксом
+    "tfidf_", чтобы в MLflow UI не путать с обычными гиперпараметрами
+    модели при просмотре одной плоской таблицы параметров.
+    """
+    from scripts.tune_lightgbm import tune_lightgbm
+
+    result = tune_lightgbm(n_trials=n_trials, save=True)
+
+    mlflow.log_params(result["best_model_params"])
+    mlflow.log_params({
+        f"tfidf_{k}": v for k, v in result["best_tfidf_max_features"].items()
+    })
+    mlflow.log_metric("best_roc_auc", result["best_value"])
+
+    return result
+
+
+TUNING_LOGGERS = {
+    "catboost": _log_catboost_tuning,
+    "lightgbm": _log_lightgbm_tuning,
+}
+
+
 def log_tuning_run(model: str = "catboost", n_trials: int = 15) -> dict:
     """
     Логирует Optuna-тюнинг как один run с итоговым результатом поиска
@@ -154,38 +203,50 @@ def log_tuning_run(model: str = "catboost", n_trials: int = 15) -> dict:
     tags "phase"="tuning" отличает такие run'ы от обычного обучения
     (log_catboost_run и т.д.), чтобы в MLflow UI их можно было
     отфильтровать отдельно.
+
+    model: "catboost" или "lightgbm" — какой tune_*.py запускать
+    (см. TUNING_LOGGERS; каждый модельный тюнинг логируется по-своему,
+    так как tune_catboost.py и tune_lightgbm.py возвращают разную
+    структуру результата — см. докстринги _log_catboost_tuning /
+    _log_lightgbm_tuning).
     """
-    if model != "catboost":
-        raise NotImplementedError(
-            "Логирование тюнинга пока реализовано только для CatBoost "
-            "(scripts/tune_catboost.py). Для LightGBM (scripts/tune_lightgbm.py) "
-            "аналогично добавить при необходимости."
+    if model not in TUNING_LOGGERS:
+        raise ValueError(
+            f"Неизвестная модель '{model}' для тюнинга. "
+            f"Доступные: {list(TUNING_LOGGERS.keys())}"
         )
 
-    from scripts.tune_catboost import tune_hyperparameters
+    model_type_tag = "CatBoost" if model == "catboost" else "LightGBM"
 
     with mlflow.start_run(run_name=f"tuning_{model}"):
-        mlflow.set_tag("model_type", "CatBoost")
+        mlflow.set_tag("model_type", model_type_tag)
         mlflow.set_tag("phase", "tuning")
         mlflow.log_param("n_trials", n_trials)
 
-        result = tune_hyperparameters(n_trials=n_trials, save=True)
+        result = TUNING_LOGGERS[model](n_trials)
 
-        mlflow.log_params(result["best_params"])
-        mlflow.log_metric("best_roc_auc", result["best_value"])
-
-        logger.info("Тюнинг залогирован: best ROC-AUC=%.4f", result["best_value"])
+        logger.info(
+            "Тюнинг %s залогирован: best ROC-AUC=%.4f",
+            model_type_tag, result["best_value"],
+        )
         return result
 
 
-def run_all(models=None, include_tuning: bool = False) -> None:
+def run_all(models=None, tuning=None) -> None:
+    """
+    tuning: список моделей, для которых дополнительно прогнать и
+    залогировать Optuna-тюнинг перед обучением (например ["catboost"]
+    или ["catboost", "lightgbm"]). None/пустой список — тюнинг не
+    запускается вовсе (по умолчанию, т.к. это самая долгая часть —
+    TF-IDF в tune_lightgbm.py пересчитывается на каждый trial).
+    """
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     models = models or list(MODEL_LOGGERS.keys())
 
-    if include_tuning:
-        logger.info("=== Optuna-тюнинг CatBoost ===")
-        log_tuning_run(model="catboost")
+    for tuning_model in (tuning or []):
+        logger.info("=== Optuna-тюнинг: %s ===", tuning_model)
+        log_tuning_run(model=tuning_model)
 
     for name in models:
         logger.info("=== Обучение и логирование: %s ===", name)
@@ -210,9 +271,14 @@ if __name__ == "__main__":
         help="Какие модели обучить и залогировать (по умолчанию — все три)",
     )
     parser.add_argument(
-        "--include-tuning", action="store_true",
-        help="Дополнительно залогировать Optuna-тюнинг CatBoost (15 trials)",
+        "--tuning", nargs="+", choices=list(TUNING_LOGGERS.keys()),
+        default=None,
+        help=(
+            "Дополнительно залогировать Optuna-тюнинг перед обучением "
+            "указанных моделей (например: --tuning catboost lightgbm). "
+            "По умолчанию тюнинг не запускается."
+        ),
     )
     args = parser.parse_args()
 
-    run_all(models=args.models, include_tuning=args.include_tuning)
+    run_all(models=args.models, tuning=args.tuning)
