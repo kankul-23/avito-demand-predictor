@@ -1,0 +1,35 @@
+# Не нужно внутри образа — сервис инференса не трогает эти данные
+# в рантайме (см. Dockerfile: COPY только src/ и models/*.cbm|*.pkl).
+
+.git/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Сырые/промежуточные данные — тяжёлые, не нужны сервису для инференса
+# (он принимает JSON через API, а не читает CSV/parquet с диска)
+data/
+catboost_info/
+mlruns/
+mlflow.db
+
+# Ноутбуки, доклад, документация — не часть рантайма
+notebooks/
+*.docx
+*.pptx
+Доклад_текст_выступления.md
+структура проекта.txt
+
+# models/ копируется ТОЧЕЧНО в Dockerfile (только .cbm и .pkl нужной модели) —
+# здесь исключаем всю папку, чтобы не тащить lightgbm/logreg веса и JSON,
+# которые сервису не нужны, а конкретные COPY-строки в Dockerfile всё
+# равно возьмут то, что им явно указано, в обход этого правила.
+models/
+
+tests/
+scripts/
+Dockerfile
+.dockerignore
+README.md

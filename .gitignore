@@ -15,16 +15,13 @@ models/*.txt
 # Логи, кэш и чекпоинты
 catboost_info/
 mlruns/
+mlflow.db
 .ipynb_checkpoints/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Приватные файлы, доклады и заметки
 *.docx
 *.pptx
-Доклад_текст_выступления.md
-код структуры.txt
-структура проекта.txt
 
-# Тесты (добавим отдельным этапом позже)
-mlflow.db
